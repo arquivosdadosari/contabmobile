@@ -389,23 +389,23 @@
                 const obsDoCliente = obrGlobais.filter(ob => idsVinculados.includes(ob.id));
 
                 let totalObsDesteCliente = obsDoCliente.length;
-                let possuiPendencia = false;
+                let obsConcluidasDesteCliente = 0;
                 
+                // Contabiliza quantas obrigações já foram preenchidas (não vazias)
                 if (totalObsDesteCliente > 0) {
                     obsDoCliente.forEach(ob => {
                         const lancado = lancamentos.find(l => l.obrigacao_global_id === ob.id && l.cliente_id === cli.id);
                         if (lancado) {
                             const valorSalvo = lancado.valor_pago || lancado.data_entrega || lancado.texto_livre || '';
-                            if (valorSalvo.toString().trim() === '') {
-                                possuiPendencia = true;
+                            if (valorSalvo.toString().trim() !== '') {
+                                obsConcluidasDesteCliente++;
                             }
-                        } else {
-                            possuiPendencia = true;
                         }
                     });
-                } else {
-                    possuiPendencia = true;
                 }
+
+                // O cliente é considerado pendente se tiver menos preenchidos do que o total (ou se não tiver obrigações vinculadas)
+                let possuiPendencia = (totalObsDesteCliente === 0 || obsConcluidasDesteCliente < totalObsDesteCliente);
 
                 totalClientesPainel++;
                 if (possuiPendencia) {
@@ -419,11 +419,19 @@
 
                 cardsRenderizados++;
 
-                const tagAlerta = possuiPendencia 
-                    ? '<span class="tag-status tag-pendente">PENDENTE</span>' 
-                    : '<span class="tag-status tag-ok">OK</span>';
+                // --- CRIAÇÃO DA TAG DE PROGRESSO DINÂMICA ---
+                let tagAlerta = '';
+                if (totalObsDesteCliente === 0) {
+                    // Caso o cliente não tenha nenhuma obrigação associada no passo 3
+                    tagAlerta = '<span class="tag-status" style="background-color: #7f8c8d;">SEM OBRIG.</span>';
+                } else if (possuiPendencia) {
+                    // Mostra o progresso atual ex: "1/3 PENDENTE"
+                    tagAlerta = `<span class="tag-status tag-pendente">${obsConcluidasDesteCliente}/${totalObsDesteCliente} PENDENTE</span>`;
+                } else {
+                    // Mostra que concluiu tudo ex: "✓ 3/3 OK"
+                    tagAlerta = `<span class="tag-status tag-ok">✓ ${totalObsDesteCliente}/${totalObsDesteCliente} OK</span>`;
+                }
 
-                // Verifica se este card deve ser renderizado como aberto
                 const estaAberto = (clienteAtivoId === cli.id);
                 const displayEstilo = estaAberto ? 'block' : 'none';
                 const setaSinal = estaAberto ? '▲' : '▼';
@@ -487,173 +495,6 @@
             document.getElementById('dash-qtd-concluidas').textContent = totalClientesConcluidos;
             document.getElementById('dash-qtd-pendentes').textContent = totalClientesPendentes;
         }
-
-        async function salvarDadoSupabase(clienteId, obrigacaoGlobalId, valorRaw, tipoDado) {
-            const refGlobal = document.getElementById('global-referencia').value;
-            let valorParaSalvar = valorRaw;
-
-            if (tipoDado === 'valor' && valorRaw) {
-                let limpo = valorRaw.replace(/\./g, "").replace(",", ".");
-                valorParaSalvar = parseFloat(limpo) || null;
-            }
-
-            const dados = {
-                cliente_id: clienteId,
-                obrigacao_global_id: obrigacaoGlobalId,
-                referencia: refGlobal,
-                valor_pago: tipoDado === 'valor' ? valorParaSalvar : null,
-                data_entrega: tipoDado === 'data' ? valorParaSalvar : null,
-                texto_livre: tipoDado === 'texto' ? valorParaSalvar : null,
-                updated_at: new Date()
-            };
-
-            await _supabase.from('lancamentos').upsert(dados, { onConflict: 'cliente_id,obrigacao_global_id,referencia' });
-
-            // renderizarListaMobile será chamado e o card permanecerá aberto!
-            renderizarListaMobile();
-        }
-        async function renderizarListaMobile() {
-    const refGlobal = document.getElementById('global-referencia').value;
-    const secao = document.getElementById('secao-conferencia');
-    const secaoDash = document.getElementById('secao-dashboard');
-    const container = document.getElementById('container-cards');
-
-    if (!refGlobal) { secao.classList.add('hidden'); secaoDash.classList.add('hidden'); return; }
-
-    secao.classList.remove('hidden');
-    secaoDash.classList.remove('hidden');
-    const [ano, mes] = refGlobal.split('-');
-    document.getElementById('label-mes-ano').textContent = `${mes}/${ano}`;
-
-    // Busca os dados em paralelo no Supabase
-    const [resCli, resOb, resVinc, resLanc] = await Promise.all([
-        _supabase.from('clientes').select('*').order('nome'),
-        _supabase.from('obrigacoes_globais').select('*'),
-        _supabase.from('vinculos_cliente_obrigacao').select('*'),
-        _supabase.from('lancamentos').select('*').eq('referencia', refGlobal)
-    ]);
-
-    const clientes = resCli.data || [];
-    const obrGlobais = resOb.data || [];
-    const vinculos = resVinc.data || [];
-    const lancamentos = resLanc.data || [];
-
-    if (clientes.length === 0) {
-        container.innerHTML = '<p style="text-align:center;color:#666;font-size:13px;padding:10px;">Nenhum cliente cadastrado.</p>';
-        return;
-    }
-
-    container.innerHTML = '';
-    
-    // --- NOVOS CONTADORES BASEADOS EM CLIENTES ---
-    let totalClientesPainel = 0;
-    let totalClientesConcluidos = 0;
-    let totalClientesPendentes = 0;
-    let cardsRenderizados = 0;
-
-    clientes.forEach(cli => {
-        const idsVinculados = vinculos.filter(v => v.cliente_id === cli.id).map(v => v.obrigacao_global_id);
-        const obsDoCliente = obrGlobais.filter(ob => idsVinculados.includes(ob.id));
-
-        let totalObsDesteCliente = obsDoCliente.length;
-        let possuiPendencia = false;
-        
-        // Só consideramos o cliente no fluxo se ele tiver obrigações ativas
-        if (totalObsDesteCliente > 0) {
-            obsDoCliente.forEach(ob => {
-                const lancado = lancamentos.find(l => l.obrigacao_global_id === ob.id && l.cliente_id === cli.id);
-                if (lancado) {
-                    const valorSalvo = lancado.valor_pago || lancado.data_entrega || lancado.texto_livre || '';
-                    if (valorSalvo.toString().trim() === '') {
-                        possuiPendencia = true; // Achou campo vazio
-                    }
-                } else {
-                    possuiPendencia = true; // Não tem lançamento feito
-                }
-            });
-        } else {
-            // Se o cliente não tem nenhuma obrigação vinculada no Passo 3, ele é considerado pendente por padrão
-            possuiPendencia = true;
-        }
-
-        // --- CONTABILIZAÇÃO DO DASHBOARD ---
-        totalClientesPainel++;
-        if (possuiPendencia) {
-            totalClientesPendentes++;
-        } else {
-            totalClientesConcluidos++;
-        }
-
-        // --- FILTRAGEM DA TELA ---
-        if (filtroAtual === 'pendentes' && !possuiPendencia) return;
-        if (filtroAtual === 'concluidos' && possuiPendencia) return;
-
-        cardsRenderizados++;
-
-        const tagAlerta = possuiPendencia 
-            ? '<span class="tag-status tag-pendente">PENDENTE</span>' 
-            : '<span class="tag-status tag-ok">OK</span>';
-
-        let htmlCard = `
-            <div class="card-cliente">
-                <div class="topo-card" onclick="alternarCard(${cli.id})">
-                    <div>
-                        <span>${cli.nome.toUpperCase()}</span> ${tagAlerta}
-                        <div class="info-cnpj">${cli.cnpj_cpf || 'Sem CNPJ'}</div>
-                    </div>
-                    <span>▼</span>
-                </div>
-                <div class="corpo-card" id="corpo-cli-${cli.id}">
-        `;
-
-        if (totalObsDesteCliente === 0) {
-            htmlCard += `<p style="font-size:11px; color:#666; text-align:center;">Nenhuma obrigação associada. Use o Passo 3.</p>`;
-        } else {
-            obsDoCliente.forEach(ob => {
-                const lancado = lancamentos.find(l => l.obrigacao_global_id === ob.id && l.cliente_id === cli.id);
-                let valorSalvo = '';
-                if (lancado) {
-                    if (ob.tipo_dado === 'valor') valorSalvo = lancado.valor_pago || '';
-                    else if (ob.tipo_dado === 'data') valorSalvo = lancado.data_entrega || '';
-                    else valorSalvo = lancado.texto_livre || '';
-                }
-
-                let inputHtmlCustomizado = '';
-                if (ob.tipo_dado === 'data') {
-                    inputHtmlCustomizado = `<input type="date" class="input-ob" value="${valorSalvo}" onchange="salvarDadoSupabase(${cli.id}, ${ob.id}, this.value, 'data')">`;
-                } else if (ob.tipo_dado === 'valor') {
-                    const valorFormatado = valorSalvo ? formatarNumeroParaExibir(valorSalvo) : '';
-                    inputHtmlCustomizado = `<input type="text" inputmode="decimal" class="input-ob" placeholder="0,00" value="${valorFormatado}" oninput="mascararMoeda(this)" onchange="salvarDadoSupabase(${cli.id}, ${ob.id}, this.value, 'valor')">`;
-                } else {
-                    inputHtmlCustomizado = `<input type="text" class="input-ob" placeholder="texto" value="${valorSalvo}" onchange="salvarDadoSupabase(${cli.id}, ${ob.id}, this.value, 'texto')">`;
-                }
-
-                htmlCard += `
-                    <div class="linha-obrigacao">
-                        <span class="nome-ob">${ob.descricao.toUpperCase()}</span>
-                        ${inputHtmlCustomizado}
-                    </div>
-                `;
-            });
-        }
-
-        htmlCard += `</div></div>`;
-        container.innerHTML += htmlCard;
-    });
-
-    if (cardsRenderizados === 0) {
-        container.innerHTML = `<p style="text-align:center;color:#666;font-size:12px;padding:15px;background:#fff;border-radius:6px;">Nenhum cliente correspondente.</p>`;
-    }
-
-    // --- ATUALIZAÇÃO DOS COMPONENTES DO DASHBOARD ---
-    const pctConclusao = totalClientesPainel > 0 ? Math.round((totalClientesConcluidos / totalClientesPainel) * 100) : 0;
-
-    document.getElementById('dash-txt-porcentagem').textContent = `${pctConclusao}%`;
-    document.getElementById('dash-barra-progresso').style.width = `${pctConclusao}%`;
-    document.getElementById('dash-qtd-total').textContent = totalClientesPainel;
-    document.getElementById('dash-qtd-concluidas').textContent = totalClientesConcluidos;
-    document.getElementById('dash-qtd-pendentes').textContent = totalClientesPendentes;
-}
 
         async function salvarDadoSupabase(clienteId, obrigacaoGlobalId, valorRaw, tipoDado) {
             const refGlobal = document.getElementById('global-referencia').value;
