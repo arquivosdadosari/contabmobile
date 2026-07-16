@@ -420,15 +420,16 @@
                 cardsRenderizados++;
 
                 // --- CRIAÇÃO DA TAG DE PROGRESSO DINÂMICA ---
+               // --- CRIAÇÃO DA TAG DE PROGRESSO DINÂMICA ---
                 let tagAlerta = '';
                 if (totalObsDesteCliente === 0) {
-                    // Caso o cliente não tenha nenhuma obrigação associada no passo 3
+                    // Se o cliente não tiver nenhuma obrigação vinculada
                     tagAlerta = '<span class="tag-status" style="background-color: #7f8c8d;">SEM OBRIG.</span>';
                 } else if (possuiPendencia) {
-                    // Mostra o progresso atual ex: "1/3 PENDENTE"
+                    // AQUI ESTÁ A MÁGICA: mostra a quantidade concluída sobre o total (ex: 1/3 PENDENTE)
                     tagAlerta = `<span class="tag-status tag-pendente">${obsConcluidasDesteCliente}/${totalObsDesteCliente} PENDENTE</span>`;
                 } else {
-                    // Mostra que concluiu tudo ex: "✓ 3/3 OK"
+                    // Quando terminar tudo (ex: ✓ 3/3 OK)
                     tagAlerta = `<span class="tag-status tag-ok">✓ ${totalObsDesteCliente}/${totalObsDesteCliente} OK</span>`;
                 }
 
