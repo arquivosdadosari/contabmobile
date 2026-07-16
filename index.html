@@ -294,9 +294,32 @@
             document.getElementById('details-vinc').removeAttribute('open'); 
             renderizarListaMobile();
         }
+        // Mantém o ID do cliente que está com o card aberto no momento
+        let clienteAtivoId = null;
+
         function alternarCard(clienteId) {
             const corpo = document.getElementById(`corpo-cli-${clienteId}`);
-            corpo.style.display = (corpo.style.display === 'block') ? 'none' : 'block';
+            const seta = corpo.previousElementSibling.querySelector('span:last-child');
+            
+            if (corpo.style.display === 'block') {
+                corpo.style.display = 'none';
+                if (seta) seta.textContent = '▼';
+                clienteAtivoId = null; // Se fechou, limpa o ativo
+            } else {
+                // Fecha o anterior se quiser um comportamento sanfona (opcional)
+                if (clienteAtivoId) {
+                    const corpoAntigo = document.getElementById(`corpo-cli-${clienteAtivoId}`);
+                    if (corpoAntigo) {
+                        corpoAntigo.style.display = 'none';
+                        const setaAntiga = corpoAntigo.previousElementSibling.querySelector('span:last-child');
+                        if (setaAntiga) setaAntiga.textContent = '▼';
+                    }
+                }
+                
+                corpo.style.display = 'block';
+                if (seta) seta.textContent = '▲';
+                clienteAtivoId = clienteId; // Salva o ID do card aberto
+            }
         }
 
         function mascararMoeda(input) {
@@ -324,6 +347,171 @@
             renderizarListaMobile();
         }
 
+        async function renderizarListaMobile() {
+            const refGlobal = document.getElementById('global-referencia').value;
+            const secao = document.getElementById('secao-conferencia');
+            const secaoDash = document.getElementById('secao-dashboard');
+            const container = document.getElementById('container-cards');
+
+            if (!refGlobal) { secao.classList.add('hidden'); secaoDash.classList.add('hidden'); return; }
+
+            secao.classList.remove('hidden');
+            secaoDash.classList.remove('hidden');
+            const [ano, mes] = refGlobal.split('-');
+            document.getElementById('label-mes-ano').textContent = `${mes}/${ano}`;
+
+            const [resCli, resOb, resVinc, resLanc] = await Promise.all([
+                _supabase.from('clientes').select('*').order('nome'),
+                _supabase.from('obrigacoes_globais').select('*'),
+                _supabase.from('vinculos_cliente_obrigacao').select('*'),
+                _supabase.from('lancamentos').select('*').eq('referencia', refGlobal)
+            ]);
+
+            const clientes = resCli.data || [];
+            const obrGlobais = resOb.data || [];
+            const vinculos = resVinc.data || [];
+            const lancamentos = resLanc.data || [];
+
+            if (clientes.length === 0) {
+                container.innerHTML = '<p style="text-align:center;color:#666;font-size:13px;padding:10px;">Nenhum cliente cadastrado.</p>';
+                return;
+            }
+
+            container.innerHTML = '';
+            
+            let totalClientesPainel = 0;
+            let totalClientesConcluidos = 0;
+            let totalClientesPendentes = 0;
+            let cardsRenderizados = 0;
+
+            clientes.forEach(cli => {
+                const idsVinculados = vinculos.filter(v => v.cliente_id === cli.id).map(v => v.obrigacao_global_id);
+                const obsDoCliente = obrGlobais.filter(ob => idsVinculados.includes(ob.id));
+
+                let totalObsDesteCliente = obsDoCliente.length;
+                let possuiPendencia = false;
+                
+                if (totalObsDesteCliente > 0) {
+                    obsDoCliente.forEach(ob => {
+                        const lancado = lancamentos.find(l => l.obrigacao_global_id === ob.id && l.cliente_id === cli.id);
+                        if (lancado) {
+                            const valorSalvo = lancado.valor_pago || lancado.data_entrega || lancado.texto_livre || '';
+                            if (valorSalvo.toString().trim() === '') {
+                                possuiPendencia = true;
+                            }
+                        } else {
+                            possuiPendencia = true;
+                        }
+                    });
+                } else {
+                    possuiPendencia = true;
+                }
+
+                totalClientesPainel++;
+                if (possuiPendencia) {
+                    totalClientesPendentes++;
+                } else {
+                    totalClientesConcluidos++;
+                }
+
+                if (filtroAtual === 'pendentes' && !possuiPendencia) return;
+                if (filtroAtual === 'concluidos' && possuiPendencia) return;
+
+                cardsRenderizados++;
+
+                const tagAlerta = possuiPendencia 
+                    ? '<span class="tag-status tag-pendente">PENDENTE</span>' 
+                    : '<span class="tag-status tag-ok">OK</span>';
+
+                // Verifica se este card deve ser renderizado como aberto
+                const estaAberto = (clienteAtivoId === cli.id);
+                const displayEstilo = estaAberto ? 'block' : 'none';
+                const setaSinal = estaAberto ? '▲' : '▼';
+
+                let htmlCard = `
+                    <div class="card-cliente">
+                        <div class="topo-card" onclick="alternarCard(${cli.id})">
+                            <div>
+                                <span>${cli.nome.toUpperCase()}</span> ${tagAlerta}
+                                <div class="info-cnpj">${cli.cnpj_cpf || 'Sem CNPJ'}</div>
+                            </div>
+                            <span>${setaSinal}</span>
+                        </div>
+                        <div class="corpo-card" id="corpo-cli-${cli.id}" style="display: ${displayEstilo};">
+                `;
+
+                if (totalObsDesteCliente === 0) {
+                    htmlCard += `<p style="font-size:11px; color:#666; text-align:center;">Nenhuma obrigação associada. Use o Passo 3.</p>`;
+                } else {
+                    obsDoCliente.forEach(ob => {
+                        const lancado = lancamentos.find(l => l.obrigacao_global_id === ob.id && l.cliente_id === cli.id);
+                        let valorSalvo = '';
+                        if (lancado) {
+                            if (ob.tipo_dado === 'valor') valorSalvo = lancado.valor_pago || '';
+                            else if (ob.tipo_dado === 'data') valorSalvo = lancado.data_entrega || '';
+                            else valorSalvo = lancado.texto_livre || '';
+                        }
+
+                        let inputHtmlCustomizado = '';
+                        if (ob.tipo_dado === 'data') {
+                            inputHtmlCustomizado = `<input type="date" class="input-ob" value="${valorSalvo}" onchange="salvarDadoSupabase(${cli.id}, ${ob.id}, this.value, 'data')">`;
+                        } else if (ob.tipo_dado === 'valor') {
+                            const valorFormatado = valorSalvo ? formatarNumeroParaExibir(valorSalvo) : '';
+                            inputHtmlCustomizado = `<input type="text" inputmode="decimal" class="input-ob" placeholder="0,00" value="${valorFormatado}" oninput="mascararMoeda(this)" onchange="salvarDadoSupabase(${cli.id}, ${ob.id}, this.value, 'valor')">`;
+                        } else {
+                            inputHtmlCustomizado = `<input type="text" class="input-ob" placeholder="texto" value="${valorSalvo}" onchange="salvarDadoSupabase(${cli.id}, ${ob.id}, this.value, 'texto')">`;
+                        }
+
+                        htmlCard += `
+                            <div class="linha-obrigacao">
+                                <span class="nome-ob">${ob.descricao.toUpperCase()}</span>
+                                ${inputHtmlCustomizado}
+                            </div>
+                        `;
+                    });
+                }
+
+                htmlCard += `</div></div>`;
+                container.innerHTML += htmlCard;
+            });
+
+            if (cardsRenderizados === 0) {
+                container.innerHTML = `<p style="text-align:center;color:#666;font-size:12px;padding:15px;background:#fff;border-radius:6px;">Nenhum cliente correspondente.</p>`;
+            }
+
+            const pctConclusao = totalClientesPainel > 0 ? Math.round((totalClientesConcluidos / totalClientesPainel) * 100) : 0;
+
+            document.getElementById('dash-txt-porcentagem').textContent = `${pctConclusao}%`;
+            document.getElementById('dash-barra-progresso').style.width = `${pctConclusao}%`;
+            document.getElementById('dash-qtd-total').textContent = totalClientesPainel;
+            document.getElementById('dash-qtd-concluidas').textContent = totalClientesConcluidos;
+            document.getElementById('dash-qtd-pendentes').textContent = totalClientesPendentes;
+        }
+
+        async function salvarDadoSupabase(clienteId, obrigacaoGlobalId, valorRaw, tipoDado) {
+            const refGlobal = document.getElementById('global-referencia').value;
+            let valorParaSalvar = valorRaw;
+
+            if (tipoDado === 'valor' && valorRaw) {
+                let limpo = valorRaw.replace(/\./g, "").replace(",", ".");
+                valorParaSalvar = parseFloat(limpo) || null;
+            }
+
+            const dados = {
+                cliente_id: clienteId,
+                obrigacao_global_id: obrigacaoGlobalId,
+                referencia: refGlobal,
+                valor_pago: tipoDado === 'valor' ? valorParaSalvar : null,
+                data_entrega: tipoDado === 'data' ? valorParaSalvar : null,
+                texto_livre: tipoDado === 'texto' ? valorParaSalvar : null,
+                updated_at: new Date()
+            };
+
+            await _supabase.from('lancamentos').upsert(dados, { onConflict: 'cliente_id,obrigacao_global_id,referencia' });
+
+            // renderizarListaMobile será chamado e o card permanecerá aberto!
+            renderizarListaMobile();
+        }
         async function renderizarListaMobile() {
     const refGlobal = document.getElementById('global-referencia').value;
     const secao = document.getElementById('secao-conferencia');
